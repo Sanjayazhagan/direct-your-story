@@ -5,7 +5,6 @@ import ThemeInput from "./ThemeInput.jsx";
 import LoadingStatus from "./LoadingStatus.jsx";
 import {API_BASE_URL} from "../util.js";
 
-
 function StoryGenerator() {
     const navigate = useNavigate()
     const [theme, setTheme] = useState("")
@@ -14,21 +13,24 @@ function StoryGenerator() {
     const [error, setError] = useState(null)
     const [loading, setLoading] = useState(false)
 
+    // --- FIX 1: UPDATE THE STATUS CHECK ---
+    // Now we check for "pending" OR "processing"
+    const isPolling = jobStatus === "pending" || jobStatus === "processing";
+
     useEffect(() => {
         let pollInterval;
 
-        if (jobId && jobStatus === "processing") {
+        // Start loop if we have an ID and the status is active (pending/processing)
+        if (jobId && isPolling) {
             pollInterval = setInterval(() => {
                 pollJobStatus(jobId)
             }, 5000)
         }
 
         return () => {
-            if (pollInterval) {
-                clearInterval(pollInterval)
-            }
+            if (pollInterval) clearInterval(pollInterval)
         }
-    }, [jobId, jobStatus])
+    }, [jobId, jobStatus]) // Dependency array handles the updates
 
     const generateStory = async (theme) => {
         setLoading(true)
@@ -36,12 +38,21 @@ function StoryGenerator() {
         setTheme(theme)
 
         try {
-            const response = await axios.post(`${API_BASE_URL}/stories/create`, {theme})
-            const {job_id, status} = response.data
-            setJobId(job_id)
-            setJobStatus(status)
+            // Added timeout to prevent early frontend aborts
+            const response = await axios.post(
+                `${API_BASE_URL}/stories/create`, 
+                {theme},
+                { timeout: 120000 }
+            )
+            
+            // --- FIX 2: USE THE EXACT KEY FROM YOUR SCREENSHOT ---
+            const { job_id, status } = response.data
+            
+            if (!job_id) throw new Error("No job_id received")
 
-            pollJobStatus(job_id)
+            setJobId(job_id)
+            setJobStatus(status) // This will be "pending", which triggers the useEffect now
+            
         } catch (e) {
             setLoading(false)
             setError(`Failed to generate story: ${e.message}`)
@@ -52,6 +63,8 @@ function StoryGenerator() {
         try {
             const response = await axios.get(`${API_BASE_URL}/jobs/${id}`)
             const {status, story_id, error: jobError} = response.data
+            
+            console.log("Polling status:", status); // Debug log
             setJobStatus(status)
 
             if (status === "completed" && story_id) {
@@ -60,6 +73,7 @@ function StoryGenerator() {
                 setError(jobError || "Failed to generate story")
                 setLoading(false)
             }
+            // If status is still "pending" or "processing", the useEffect loop keeps going automatically
         } catch (e) {
             if (e.response?.status !== 404) {
                 setError(`Failed to check story status: ${e.message}`)
@@ -87,16 +101,18 @@ function StoryGenerator() {
         setLoading(false)
     }
 
-    return <div className="story-generator">
-        {error && <div className="error-message">
-            <p>{error}</p>
-            <button onClick={reset}>Try Again</button>
-        </div>}
+    return (
+        <div className="story-generator">
+            {error && <div className="error-message">
+                <p>{error}</p>
+                <button onClick={reset}>Try Again</button>
+            </div>}
 
-        {!jobId && !error && !loading && <ThemeInput onSubmit={generateStory}/>}
+            {!jobId && !error && !loading && <ThemeInput onSubmit={generateStory}/>}
 
-        {loading && <LoadingStatus theme={theme} />}
-    </div>
+            {loading && <LoadingStatus theme={theme} />}
+        </div>
+    )
 }
 
 export default StoryGenerator
